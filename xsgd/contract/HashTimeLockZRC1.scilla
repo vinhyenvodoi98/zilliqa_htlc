@@ -1,0 +1,47 @@
+scilla_version 0
+
+(***************************************************)
+(*               Associated library                *)
+(***************************************************)
+import IntUtils
+library HashTimeLockContract
+
+let one_msg = 
+  fun (msg : Message) => 
+  let nil_msg = Nil {Message} in
+  Cons {Message} msg nil_msg
+  
+let INVALID = Uint32 0
+let ACTIVE = Uint32 1
+let REFUNDED = Uint32 2
+let WITHDRAWN = Uint32 3
+let EXPIRED = Uint32 4
+
+contract HashTimeLockContact ()
+
+transition newContract (inputAmount: Uint128,
+                        outputAmount: Uint128,
+                        expiration: Uint128, 
+                        hashLock: ByStr32,
+                        tokenAddress: ByStr32,
+                        receiver: ByStr20,
+                        outputNetwork : String, 
+                        outputAddress : String)
+
+
+end
+
+transition withdraw(id: ByStr32,secret: ByStr32,tokenAddress: ByStr20 )
+
+
+end
+
+transition refund (id: ByStr32,tokenAddre: ByStr20)
+
+end
+
+end
+
+
+
+
