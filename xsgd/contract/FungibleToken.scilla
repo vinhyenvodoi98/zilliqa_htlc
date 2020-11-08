@@ -182,9 +182,9 @@ transition TransferFrom(from: ByStr20, to: ByStr20, amount: Uint128)
     new_allowed = builtin sub allowed amount;
     allowances[from][_sender] := new_allowed;
     (* Prevent sending to a contract address that does not support transfers of token *)
-    msg_to_recipient = {_tag: "RecipientAcceptTransferFrom"; _recipient : to; _amount: zero; 
+    msg_to_recipient = {_tag: "RecipientAcceptTransferFrom"; _recipient : to; _amount: zero;
                         initiator: _sender; sender : from; recipient: to; amount: amount};
-    msg_to_sender = {_tag: "TransferFromSuccessCallBack"; _recipient: _sender; _amount: zero; 
+    msg_to_sender = {_tag: "TransferFromSuccessCallBack"; _recipient: _sender; _amount: zero;
                     initiator: _sender; sender: from; recipient: to; amount: amount};
     msgs = two_msgs msg_to_recipient msg_to_sender;
     send msgs

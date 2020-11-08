@@ -1,0 +1,232 @@
+scilla_version 0
+
+(***************************************************)
+(*               Associated library                *)
+(***************************************************)
+import IntUtils BoolUtils
+library HashTimeLockContract
+
+let one_msg = 
+  fun (msg : Message) => 
+  let nil_msg = Nil {Message} in
+  Cons {Message} msg nil_msg
+
+let zero = Uint128 0
+
+(*                   / - WITHDRAWN           *)
+(* INVALID - ACTIVE |                        *)
+(*                   \ - EXPIRED - REFUNDED  *)
+
+let invalid = Uint32 0  (*Uninitialized  swap -> can go to ACTIVE*)
+let active = Uint32 1   (*Active swap -> can go to WITHDRAWN or EXPIRED*)
+let refunded = Uint32 2 (*Swap is refunded -> final state*)
+let withdraw = Uint32 3 (*Swap is withdrawn -> final state.*)
+let expired = Uint32 4  (*Swap is expired -> can go to REFUNDED*)
+
+contract HashTimeLockContract ()
+
+(* struct hashlocks {    *)
+(*    bytes32 id*)
+(*    address sender;*)
+(*    address receiver;*)
+(*    uint256 inputAmount;*)
+(*    uint256 outputAmount;*)
+(*    uint256 expiration;*)
+(*    uint32 status;*)
+(*    bytes32 hashLock;*)
+(*    address tokenAddress;*)
+(*    string outputNetwork;*)
+(*    string outputAddress;*)
+(* } *)
+
+field htlc_sender        : Map ByStr32 ByStr20 = Emp ByStr32 ByStr20
+field htlc_receiver      : Map ByStr32 ByStr20 = Emp ByStr32 ByStr20
+field htlc_inputAmount   : Map ByStr32 Uint128 = Emp ByStr32 Uint128
+field htlc_expiration    : Map ByStr32 BNum = Emp ByStr32 BNum
+field htlc_status        : Map ByStr32 Uint32 = Emp ByStr32 Uint32
+field htlc_hashLock      : Map ByStr32 ByStr32 = Emp ByStr32 ByStr32
+field htlc_tokenAddress  : Map ByStr32 ByStr20 = Emp ByStr32 ByStr20
+field htlc_outputNetwork : Map ByStr32 String = Emp ByStr32 String
+field htlc_outputAddress : Map ByStr32 String = Emp ByStr32 String
+
+transition newContract (inputAmount: Uint128,
+                        expiration: BNum, 
+                        hashLock: ByStr32,
+                        tokenAddress: ByStr20,
+                        receiver: ByStr20,
+                        outputNetwork : String, 
+                        outputAddress : String)
+  
+  (*  ~30s per block *)
+  currentBlock <- & BLOCKNUMBER;
+  is_valid_time = builtin blt expiration currentBlock;
+  
+  match is_valid_time with
+    | True => 
+      e = {_eventname: "create_failed"; msg: "Lock time must be greater than current time"};
+      event e  
+    | False =>
+      
+      is_valid_input = builtin lt inputAmount zero;
+      match is_valid_input with
+      | True =>
+        e = {_eventname: "create_failed"; msg: "input amount must be greater than 0"};
+        event e
+      | False =>
+        (*send zrc2 to contract*)
+        
+        (*id = ByStr32 (hashing with sha256 ) *)
+        id = builtin sha256hash hashLock;
+        
+        htlc_sender[id] := _sender;
+        htlc_receiver[id]:= receiver;      
+        htlc_inputAmount[id]:=inputAmount;
+        htlc_expiration[id]:=expiration;
+        htlc_status[id]:=active;
+        htlc_hashLock[id]:=hashLock;
+        htlc_tokenAddress[id]:=tokenAddress; 
+        htlc_outputNetwork[id]:=outputNetwork;
+        htlc_outputAddress[id]:=outputAddress;
+        
+        e = {_eventname: "create_success"; msg: id};
+        event e;
+        
+        msg_to_token = {
+          _tag : "TransferFrom"; _recipient: tokenAddress; _amount: zero;
+          from: _sender; to: _this_address; amount: inputAmount
+        };
+        msgs = one_msg msg_to_token;
+        send msgs
+      end
+  end
+end
+
+
+transition withdraw(id: ByStr32, secret: ByStr32, tokenAddress: ByStr20)
+  token <- htlc_tokenAddress[id];
+  
+  match token with
+    | Some v=>
+    is_correct_token = builtin eq tokenAddress v;
+    match is_correct_token with
+      | True =>
+      time <- htlc_expiration[id];
+      match time with 
+      | Some t=>
+        currentBlock <- & BLOCKNUMBER;
+        is_valid_time = builtin blt currentBlock t;
+        match is_valid_time with
+          | True =>
+            e = {_eventname: "withdraw_success"; msg: secret };
+            event e;
+            
+            receiver <- htlc_receiver[id];
+            inputAmount <- htlc_inputAmount[id];
+            match receiver with 
+            | Some r=>
+              match inputAmount with 
+              | Some i=>
+                htlc_status[id]:=withdraw;
+                msg_to_token =  {
+                  _tag : "Transfer"; _recipient: tokenAddress; _amount: zero;
+                  to: r; amount: i
+                };
+                msgs = one_msg msg_to_token;
+                
+                send msgs
+              | None=>
+              end
+            | None=>
+            end
+          | False =>
+          e = {_eventname: "withdraw_failed"; msg: "time is over"};
+          event e
+        end
+      | None=>
+      end
+      
+      | False =>
+      e = {_eventname: "withdraw_failed"; msg: "not correct token address"};
+      event e          
+    end
+    | None =>
+  end
+end
+
+transition refund (id: ByStr32, tokenAddress: ByStr20)
+  token <- htlc_tokenAddress[id];
+  match token with
+    | Some v=>
+      is_correct_token = builtin eq tokenAddress v;
+      match is_correct_token with
+        | True =>
+          time <- htlc_expiration[id];
+          match time with 
+          | Some t=>
+            currentBlock <- & BLOCKNUMBER;
+            is_valid_time = builtin blt t currentBlock;
+            match is_valid_time with
+              | True =>
+                e = {_eventname: "refund_success"; msg: id };
+                event e;
+                
+                sender <- htlc_sender[id];
+                inputAmount <- htlc_inputAmount[id];
+                match sender with 
+                | Some s=>
+                  match inputAmount with 
+                  | Some i=>
+                    htlc_status[id]:=refunded;
+                    
+                    msg_to_token =  {
+                      _tag : "Transfer"; _recipient: tokenAddress; _amount: zero;
+                      to: s; amount: i
+                    };
+                    msgs = one_msg msg_to_token;
+                    
+                    send msgs
+                  | None=>
+                  end
+                | None=>
+                end
+              | False =>
+                e = {_eventname: "refund_failed"; msg: "It's top early"};
+                event e
+            end
+          | None =>
+          end
+        | False =>
+          e = {_eventname: "withdraw_failed"; msg: "not correct token address"};
+          event e  
+      end
+    | None =>
+  end
+end
+
+transition getStatus (id: ByStr32)
+  status <- htlc_status[id];
+  match status with
+    |Some s=>
+      time <- htlc_expiration[id];
+      is_active = builtin eq s active;
+      match time with
+        |Some t=>
+          currentBlock <- & BLOCKNUMBER;
+          is_valid_time = builtin blt t currentBlock;
+          is_expried = andb is_valid_time is_active;
+          match is_expried with
+            |True=>
+              e = {_eventname: "getStatus"; msg: expired};
+              event e
+            |False=>
+              e = {_eventname: "getStatus"; msg: s};
+              event e
+          end
+        |None =>
+      end
+    |None=>
+      e = {_eventname: "getStatus"; msg: invalid};
+      event e
+  end
+end
+
